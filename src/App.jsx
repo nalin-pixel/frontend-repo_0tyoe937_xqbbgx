@@ -1,5 +1,15 @@
 import { useEffect, useMemo, useState } from 'react'
 
+const HABIT_OPTIONS = [
+  { value: 'general', label: 'General Habit' },
+  { value: 'phone', label: 'Phone Overuse' },
+  { value: 'junk food', label: 'Junk Food' },
+  { value: 'procrastination', label: 'Procrastination' },
+  { value: 'smoking', label: 'Smoking' },
+  { value: 'alcohol', label: 'Alcohol' },
+  { value: 'gambling', label: 'Gambling' },
+]
+
 function App() {
   const baseUrl = useMemo(() => import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000', [])
 
@@ -10,6 +20,8 @@ function App() {
   const [tips, setTips] = useState([])
   const [journalItems, setJournalItems] = useState([])
   const [goals, setGoals] = useState([])
+
+  const [habit, setHabit] = useState('general')
 
   const [journalForm, setJournalForm] = useState({ note: '', intensity: 5, feeling: '' })
   const [goalForm, setGoalForm] = useState({ title: '', target_days: 30 })
@@ -25,7 +37,7 @@ function App() {
     setError('')
     try {
       const [tipsRes, journalRes, goalsRes, streakRes] = await Promise.all([
-        fetchJson(`${baseUrl}/api/tips`),
+        fetchJson(`${baseUrl}/api/tips?habit=${encodeURIComponent(habit)}`),
         fetchJson(`${baseUrl}/api/journal`),
         fetchJson(`${baseUrl}/api/goals`),
         fetchJson(`${baseUrl}/api/streak`)
@@ -42,6 +54,16 @@ function App() {
   }
 
   useEffect(() => { loadAll() }, [])
+  useEffect(() => { // refresh tips when habit changes
+    (async () => {
+      try {
+        const t = await fetchJson(`${baseUrl}/api/tips?habit=${encodeURIComponent(habit)}`)
+        setTips(t.tips || [])
+      } catch (e) {
+        // ignore tip-only errors
+      }
+    })()
+  }, [habit])
 
   const handleCheckIn = async () => {
     setLoading(true)
@@ -86,12 +108,24 @@ function App() {
     } catch (e) { setError(e.message) } finally { setLoading(false) }
   }
 
+  const currentHabitLabel = HABIT_OPTIONS.find(h => h.value === habit)?.label || 'General Habit'
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-50 to-emerald-50">
       <header className="px-6 py-6">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
-          <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-800">Recovery Companion</h1>
-          <div className="text-sm text-gray-500">Backend: <span className="font-mono">{baseUrl}</span></div>
+        <div className="max-w-5xl mx-auto flex items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl sm:text-3xl font-extrabold text-gray-800">Habit Breaker</h1>
+            <p className="text-sm text-gray-600">Build better routines, one day at a time.</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <label className="text-sm text-gray-600">Focus:</label>
+            <select value={habit} onChange={(e) => setHabit(e.target.value)} className="text-sm p-2 border border-gray-200 rounded-lg bg-white">
+              {HABIT_OPTIONS.map(opt => (
+                <option key={opt.value} value={opt.value}>{opt.label}</option>
+              ))}
+            </select>
+          </div>
         </div>
       </header>
 
@@ -113,24 +147,25 @@ function App() {
           </div>
 
           <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-            <h2 className="text-xl font-semibold text-gray-800 mb-3">Quick Tips</h2>
+            <h2 className="text-xl font-semibold text-gray-800 mb-1">Quick Tips</h2>
+            <p className="text-xs text-gray-500 mb-3">Tailored for: <span className="font-medium text-gray-700">{currentHabitLabel}</span></p>
             <ul className="space-y-2">
               {tips.map((t, i) => (
                 <li key={i} className="text-gray-700 text-sm flex gap-2"><span className="mt-1 h-2 w-2 rounded-full bg-emerald-400"></span>{t}</li>
               ))}
             </ul>
-            <button onClick={loadAll} className="mt-4 text-emerald-700 hover:text-emerald-800 text-sm">Refresh tips</button>
+            <button onClick={() => loadAll()} className="mt-4 text-emerald-700 hover:text-emerald-800 text-sm">Refresh</button>
           </div>
         </section>
 
         <section className="grid md:grid-cols-2 gap-6 mb-10">
           <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
-            <h3 className="text-lg font-semibold text-gray-800 mb-3">Log an Urge or Trigger</h3>
+            <h3 className="text-lg font-semibold text-gray-800 mb-3">Log a Trigger or Craving</h3>
             <form onSubmit={submitJournal} className="space-y-3">
               <textarea
                 value={journalForm.note}
                 onChange={(e) => setJournalForm({ ...journalForm, note: e.target.value })}
-                placeholder="What happened? What did you do instead?"
+                placeholder={`What happened? How did you respond? (${currentHabitLabel})`}
                 className="w-full h-28 p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300"
               />
               <div className="grid grid-cols-2 gap-3">
@@ -159,7 +194,7 @@ function App() {
                 type="text"
                 value={goalForm.title}
                 onChange={(e) => setGoalForm({ ...goalForm, title: e.target.value })}
-                placeholder="Example: 30-day no-porn challenge"
+                placeholder="Example: 30-day clean streak"
                 className="w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-300"
               />
               <div className="grid grid-cols-2 gap-3">
@@ -219,6 +254,8 @@ function App() {
           <a href="/test" className="text-sm text-gray-500 hover:text-gray-700">System status</a>
           <button onClick={loadAll} disabled={loading} className="text-sm text-emerald-700 hover:text-emerald-800">Refresh All</button>
         </div>
+
+        <div className="mt-4 text-xs text-gray-400">Backend: <span className="font-mono">{baseUrl}</span></div>
       </main>
     </div>
   )
