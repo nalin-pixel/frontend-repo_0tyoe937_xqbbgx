@@ -17,17 +17,27 @@ function App() {
   const [error, setError] = useState('')
 
   const [streak, setStreak] = useState(0)
+  const [currentStreak, setCurrentStreak] = useState(0)
   const [tips, setTips] = useState([])
   const [journalItems, setJournalItems] = useState([])
   const [goals, setGoals] = useState([])
+  const [metrics, setMetrics] = useState({ checkins: [], journal_count: 0, avg_intensity: null })
 
-  const [habit, setHabit] = useState('general')
+  const [habit, setHabit] = useState(() => localStorage.getItem('hb_habit') || 'general')
 
   const [journalForm, setJournalForm] = useState({ note: '', intensity: 5, feeling: '' })
   const [goalForm, setGoalForm] = useState({ title: '', target_days: 30 })
 
+  // Auth state
+  const [token, setToken] = useState(() => localStorage.getItem('hb_token') || '')
+  const [me, setMe] = useState(null)
+  const [authMode, setAuthMode] = useState('login') // 'login' | 'register'
+  const [authForm, setAuthForm] = useState({ email: '', password: '', display_name: '' })
+
+  const authHeaders = token ? { Authorization: `Bearer ${token}` } : {}
+
   const fetchJson = async (url, options = {}) => {
-    const res = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options })
+    const res = await fetch(url, { headers: { 'Content-Type': 'application/json', ...authHeaders, ...(options.headers || {}) }, ...options })
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
     return res.json()
   }
@@ -36,16 +46,19 @@ function App() {
     setLoading(true)
     setError('')
     try {
-      const [tipsRes, journalRes, goalsRes, streakRes] = await Promise.all([
+      const [tipsRes, journalRes, goalsRes, streakRes, metricRes] = await Promise.all([
         fetchJson(`${baseUrl}/api/tips?habit=${encodeURIComponent(habit)}`),
         fetchJson(`${baseUrl}/api/journal`),
         fetchJson(`${baseUrl}/api/goals`),
-        fetchJson(`${baseUrl}/api/streak`)
+        fetchJson(`${baseUrl}/api/streak`),
+        fetchJson(`${baseUrl}/api/metrics`),
       ])
       setTips(tipsRes.tips || [])
       setJournalItems(journalRes.items || [])
       setGoals(goalsRes.items || [])
       setStreak(streakRes.days_logged || 0)
+      setCurrentStreak(streakRes.current_streak || 0)
+      setMetrics(metricRes)
     } catch (e) {
       setError(e.message)
     } finally {
@@ -53,9 +66,10 @@ function App() {
     }
   }
 
-  useEffect(() => { loadAll() }, [])
+  useEffect(() => { loadAll() }, [token])
   useEffect(() => { // refresh tips when habit changes
-    (async () => {
+    localStorage.setItem('hb_habit', habit)
+    ;(async () => {
       try {
         const t = await fetchJson(`${baseUrl}/api/tips?habit=${encodeURIComponent(habit)}`)
         setTips(t.tips || [])
@@ -63,25 +77,70 @@ function App() {
         // ignore tip-only errors
       }
     })()
-  }, [habit])
+  }, [habit, token])
+
+  // auth helpers
+  const fetchMe = async () => {
+    if (!token) { setMe(null); return }
+    try {
+      const m = await fetchJson(`${baseUrl}/api/auth/me`)
+      setMe(m)
+    } catch {
+      setMe(null)
+    }
+  }
+  useEffect(() => { fetchMe() }, [token])
+
+  const handleRegister = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+    try {
+      const resp = await fetchJson(`${baseUrl}/api/auth/register`, { method: 'POST', body: JSON.stringify({ email: authForm.email, password: authForm.password, display_name: authForm.display_name }) })
+      setToken(resp.access_token)
+      localStorage.setItem('hb_token', resp.access_token)
+      setAuthForm({ email: '', password: '', display_name: '' })
+    } catch (e) { setError(e.message) } finally { setLoading(false) }
+  }
+
+  const handleLogin = async (e) => {
+    e.preventDefault()
+    setLoading(true)
+    setError('')
+    try {
+      const resp = await fetchJson(`${baseUrl}/api/auth/login`, { method: 'POST', body: JSON.stringify({ email: authForm.email, password: authForm.password }) })
+      setToken(resp.access_token)
+      localStorage.setItem('hb_token', resp.access_token)
+      setAuthForm({ email: '', password: '', display_name: '' })
+    } catch (e) { setError(e.message) } finally { setLoading(false) }
+  }
+
+  const handleLogout = () => {
+    setToken('')
+    localStorage.removeItem('hb_token')
+    setMe(null)
+  }
 
   const handleCheckIn = async () => {
     setLoading(true)
     setError('')
     try {
       await fetchJson(`${baseUrl}/api/checkin`, { method: 'POST', body: JSON.stringify({}) })
-      await Promise.all([loadStreakOnly(), loadJournalOnly()])
+      await Promise.all([loadStreakOnly(), loadJournalOnly(), loadMetricsOnly()])
     } catch (e) { setError(e.message) } finally { setLoading(false) }
   }
 
   const loadStreakOnly = async () => {
-    try { const s = await fetchJson(`${baseUrl}/api/streak`); setStreak(s.days_logged || 0) } catch {}
+    try { const s = await fetchJson(`${baseUrl}/api/streak`); setStreak(s.days_logged || 0); setCurrentStreak(s.current_streak || 0) } catch {}
   }
   const loadJournalOnly = async () => {
     try { const j = await fetchJson(`${baseUrl}/api/journal`); setJournalItems(j.items || []) } catch {}
   }
   const loadGoalsOnly = async () => {
     try { const g = await fetchJson(`${baseUrl}/api/goals`); setGoals(g.items || []) } catch {}
+  }
+  const loadMetricsOnly = async () => {
+    try { const m = await fetchJson(`${baseUrl}/api/metrics`); setMetrics(m) } catch {}
   }
 
   const submitJournal = async (e) => {
@@ -92,7 +151,7 @@ function App() {
     try {
       await fetchJson(`${baseUrl}/api/journal`, { method: 'POST', body: JSON.stringify(journalForm) })
       setJournalForm({ note: '', intensity: 5, feeling: '' })
-      await loadJournalOnly()
+      await Promise.all([loadJournalOnly(), loadMetricsOnly()])
     } catch (e) { setError(e.message) } finally { setLoading(false) }
   }
 
@@ -109,6 +168,20 @@ function App() {
   }
 
   const currentHabitLabel = HABIT_OPTIONS.find(h => h.value === habit)?.label || 'General Habit'
+
+  // simple bar chart component
+  const Chart = ({ data }) => {
+    const max = Math.max(1, ...data.map(d => d.count))
+    return (
+      <div className="w-full h-32 flex items-end gap-1">
+        {data.map((d) => (
+          <div key={d.day} className="flex-1 flex flex-col items-center">
+            <div className="w-full bg-emerald-200 rounded-t" style={{ height: `${(d.count / max) * 100}%` }}></div>
+          </div>
+        ))}
+      </div>
+    )
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-sky-50 to-emerald-50">
@@ -127,6 +200,30 @@ function App() {
             </select>
           </div>
         </div>
+        <div className="max-w-5xl mx-auto mt-4 flex flex-wrap items-center justify-between gap-3">
+          {me ? (
+            <div className="flex items-center gap-2 text-sm text-gray-700">
+              <span className="px-2 py-1 rounded bg-emerald-100 text-emerald-800">Signed in</span>
+              <span className="font-medium">{me.display_name || me.email}</span>
+              <button onClick={handleLogout} className="ml-2 text-red-600 hover:underline">Log out</button>
+            </div>
+          ) : (
+            <div className="bg-white/70 border border-gray-200 rounded-lg p-3">
+              <div className="flex gap-2 mb-2">
+                <button onClick={() => setAuthMode('login')} className={`text-sm px-2 py-1 rounded ${authMode==='login'?'bg-gray-800 text-white':'bg-gray-100'}`}>Login</button>
+                <button onClick={() => setAuthMode('register')} className={`text-sm px-2 py-1 rounded ${authMode==='register'?'bg-gray-800 text-white':'bg-gray-100'}`}>Register</button>
+              </div>
+              <form onSubmit={authMode==='login'?handleLogin:handleRegister} className="flex flex-wrap items-center gap-2">
+                <input type="email" placeholder="Email" value={authForm.email} onChange={(e)=>setAuthForm({...authForm, email:e.target.value})} className="p-2 border rounded" required />
+                <input type="password" placeholder="Password" value={authForm.password} onChange={(e)=>setAuthForm({...authForm, password:e.target.value})} className="p-2 border rounded" required />
+                {authMode==='register' && (
+                  <input type="text" placeholder="Display name (optional)" value={authForm.display_name} onChange={(e)=>setAuthForm({...authForm, display_name:e.target.value})} className="p-2 border rounded" />
+                )}
+                <button type="submit" disabled={loading} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded">{authMode==='login'?'Login':'Create account'}</button>
+              </form>
+            </div>
+          )}
+        </div>
       </header>
 
       <main className="max-w-5xl mx-auto px-6 pb-16">
@@ -142,8 +239,20 @@ function App() {
                 <span>Check in today</span>
               </button>
             </div>
-            <p className="text-5xl font-extrabold text-emerald-700">{streak}<span className="text-2xl text-emerald-600 ml-2">days</span></p>
-            <p className="mt-2 text-gray-600">Show up daily. Small, consistent wins compound.</p>
+            <div className="flex items-end gap-6">
+              <div>
+                <p className="text-5xl font-extrabold text-emerald-700">{streak}<span className="text-2xl text-emerald-600 ml-2">days</span></p>
+                <p className="mt-2 text-gray-600">Total days logged. Current streak: <span className="font-semibold text-emerald-700">{currentStreak}</span></p>
+              </div>
+              <div className="flex-1">
+                <Chart data={metrics.checkins || []} />
+                <div className="flex justify-between text-[10px] text-gray-500 mt-1">
+                  {(metrics.checkins||[]).map((d,i)=> (
+                    <span key={i}>{new Date(d.day).toLocaleDateString(undefined,{ month:'numeric', day:'numeric'})}</span>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="bg-white rounded-xl shadow-sm p-6 border border-gray-100">
@@ -184,6 +293,7 @@ function App() {
                 </div>
               </div>
               <button type="submit" disabled={loading} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded-lg">Save Entry</button>
+              <div className="text-xs text-gray-500">Avg intensity (last 200): {metrics.avg_intensity == null ? '—' : metrics.avg_intensity.toFixed(1)}</div>
             </form>
           </div>
 
@@ -208,6 +318,7 @@ function App() {
               </div>
               <button type="submit" disabled={loading} className="bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white px-4 py-2 rounded-lg">Create Goal</button>
             </form>
+            <p className="mt-2 text-xs text-gray-500">Journal entries stored: <span className="font-semibold">{metrics.journal_count}</span></p>
           </div>
         </section>
 
